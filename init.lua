@@ -34,6 +34,7 @@ end
 local combinedUIOpen        = { value = true }-- Use a table for mutable boolean
 local combinedUIInitialized = false
 local showPeerAAWindow      = peers.show_aa_window -- Link directly to the peers module's flag
+local showSortWindow        = peers.show_sort_editor
 
 
 ------------------------------------------------------
@@ -136,7 +137,15 @@ local function CombinedUI()
             if imgui.MenuItem("Class", nil, peers.options.sort_mode == "Class") then
             peers.options.sort_mode = "Class"
             end
+            if imgui.MenuItem("Custom", nil, peers.options.sort_mode == "Custom") then
+            peers.options.sort_mode = "Custom"
+            end
             imgui.EndMenu()
+        end
+
+        imgui.Separator()
+        if imgui.MenuItem("Show Sort Window") then
+            showSortWindow.value = not showSortWindow.value
         end
 
         imgui.Separator()
@@ -180,6 +189,7 @@ local function CombinedUI()
     imgui.End() -- End main window
 
     peers.draw_aa_window()
+    peers.draw_sort_editor()
 
     -- If main window closed, exit script
     if not combinedUIOpen.value then

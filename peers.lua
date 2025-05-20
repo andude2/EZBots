@@ -41,6 +41,7 @@ M.options = {           -- Options controlled by the main UI menu
     font_scale = 1.0,
 }
 M.show_aa_window = { value = false } -- Control the visibility of the AA window
+M.show_sort_editor = { value = false }
 
 local lastPeerCount    = 0
 local cachedPeerHeight = 300 -- Default height
@@ -346,6 +347,18 @@ local function refreshPeers()
             end
             return class_a:lower() < class_b:lower()
         end)
+    elseif M.options.sort_mode == "Custom" then
+        local custom_order = M.options.custom_order or {}
+        local id_to_peer = {}; for _, p in ipairs(new_peer_list) do id_to_peer[p.id] = p end
+        new_peer_list = {}
+        for _, entry in ipairs(custom_order) do
+            if entry.type == "filler" then
+                table.insert(new_peer_list, {type = "filler"})
+            else
+                local peer = id_to_peer[entry.id]
+                if peer then table.insert(new_peer_list, peer) end
+            end
+        end
     end
 
     M.peer_list = new_peer_list
@@ -477,6 +490,27 @@ function M.draw_peer_list()
             end
         end
 
+        if not peer then goto continue end
+
+        -- Handle filler row
+        if peer.type == "filler" then
+            imgui.TableNextRow()
+            imgui.TableNextColumn()
+
+            -- Softer color (gray-blue) with transparency
+            local fillerColor = ImVec4(0.4, 0.6, 0.9, 0.65)
+            imgui.PushStyleColor(ImGuiCol.Text, fillerColor)
+            imgui.Text("~ ~ ~ ~ ~")
+            imgui.PopStyleColor()
+
+            for i = 2, column_count do
+                imgui.TableNextColumn()
+                imgui.Text("") -- Keeps alignment clean
+            end
+            goto continue
+        end
+
+
         -- Now draw the actual peer data row
         imgui.TableNextRow()
 
@@ -604,6 +638,7 @@ function M.draw_peer_list()
             imgui.Text(peer.casting or "None")
             imgui.PopStyleColor()
         end
+        ::continue::
     end
     imgui.EndTable()
 end
@@ -646,6 +681,94 @@ function M.draw_aa_window()
     -- Important: Update the external flag if the window was closed via 'X'
     if not window_open then
         M.show_aa_window.value = false
+    end
+end
+
+function M.draw_sort_editor()
+    if not M.show_sort_editor or not M.show_sort_editor.value then return end
+    M.options.custom_order = M.options.custom_order or {}
+    local window_open = M.show_sort_editor.value
+    imgui.SetNextWindowSize(ImVec2(300, 400), ImGuiCond.FirstUseEver)
+
+    if imgui.Begin("Edit Peer Sort Order", window_open, ImGuiWindowFlags.NoCollapse) then
+        imgui.Text("Custom Sort Order:")
+        imgui.Separator()
+
+                imgui.Columns(2, nil, false) -- 2 columns: Label + Buttons
+        imgui.SetColumnWidth(0, 180)
+
+        for i, entry in ipairs(M.options.custom_order) do
+            imgui.PushID(i)
+
+            -- First column: name/filler label
+            imgui.Text(entry.type == "filler" and "~~~~~~~~~" or (M.peers[entry.id] and M.peers[entry.id].name or entry.id))
+            imgui.NextColumn()
+            local buttonSize = ImVec2(36, 0)
+
+            -- Second column: buttons
+            imgui.PushStyleVar(ImGuiStyleVar.FramePadding, ImVec2(3, 2)) -- More readable padding
+
+            if imgui.SmallButton("^", buttonSize) and i > 1 then
+                M.options.custom_order[i], M.options.custom_order[i-1] = M.options.custom_order[i-1], M.options.custom_order[i]
+            end
+            imgui.SameLine()
+            if imgui.SmallButton("v", buttonSize) and i < #M.options.custom_order then
+                M.options.custom_order[i], M.options.custom_order[i+1] = M.options.custom_order[i+1], M.options.custom_order[i]
+            end
+            imgui.SameLine()
+            if imgui.SmallButton("X", buttonSize) then
+                table.remove(M.options.custom_order, i)
+                imgui.PopStyleVar()
+                imgui.PopID()
+                imgui.NextColumn()
+                goto continue
+            end
+
+            imgui.PopStyleVar()
+            imgui.NextColumn()
+            imgui.PopID()
+            ::continue::
+        end
+
+        imgui.Columns(1) -- back to single-column layout
+
+        imgui.Separator()
+        imgui.Text("Add Peer/Filler Row:")
+
+        for id, peer in pairs(M.peers) do
+            local in_order = false
+            for _, entry in ipairs(M.options.custom_order) do
+                if entry.id == id then
+                    in_order = true
+                    break
+                end
+            end
+            if not in_order then
+                imgui.PushID(id)
+                if imgui.SmallButton(peer.name) then
+                    table.insert(M.options.custom_order, {id = id})
+                end
+                imgui.PopID()
+                imgui.SameLine()
+            end
+        end
+
+        if imgui.SmallButton("+ Add Filler Row") then
+            table.insert(M.options.custom_order, {type="filler"})
+        end
+
+        imgui.Separator()
+        if imgui.Button("Save") then
+            M.save_config()
+            M.show_sort_editor.value = false
+            M.options.sort_mode = "Custom"
+        end
+        imgui.SameLine()
+        if imgui.Button("Cancel") then
+            M.show_sort_editor.value = false
+        end
+
+        imgui.End()
     end
 end
 
