@@ -39,6 +39,7 @@ M.options = {           -- Options controlled by the main UI menu
     show_player_stats = true,
     use_class     = false,
     font_scale = 1.0,
+    filler_char = "~ ~ ~ ~ ~",
 }
 M.show_aa_window = { value = false } -- Control the visibility of the AA window
 M.show_sort_editor = { value = false }
@@ -353,7 +354,10 @@ local function refreshPeers()
         new_peer_list = {}
         for _, entry in ipairs(custom_order) do
             if entry.type == "filler" then
-                table.insert(new_peer_list, {type = "filler"})
+                table.insert(new_peer_list, {
+                    type        = "filler",
+                    filler_text = entry.filler_text or M.options.filler_char
+                })
             else
                 local peer = id_to_peer[entry.id]
                 if peer then table.insert(new_peer_list, peer) end
@@ -496,11 +500,9 @@ function M.draw_peer_list()
         if peer.type == "filler" then
             imgui.TableNextRow()
             imgui.TableNextColumn()
-
-            -- Softer color (gray-blue) with transparency
-            local fillerColor = ImVec4(0.4, 0.6, 0.9, 0.65)
-            imgui.PushStyleColor(ImGuiCol.Text, fillerColor)
-            imgui.Text("~ ~ ~ ~ ~")
+            local text = peer.filler_text or M.options.filler_char
+            imgui.PushStyleColor(ImGuiCol.Text, ImVec4(0.4,0.6,0.9,0.65))
+                imgui.Text(text)
             imgui.PopStyleColor()
 
             for i = 2, column_count do
@@ -509,7 +511,6 @@ function M.draw_peer_list()
             end
             goto continue
         end
-
 
         -- Now draw the actual peer data row
         imgui.TableNextRow()
@@ -694,14 +695,22 @@ function M.draw_sort_editor()
         imgui.Text("Custom Sort Order:")
         imgui.Separator()
 
-                imgui.Columns(2, nil, false) -- 2 columns: Label + Buttons
+        imgui.Columns(2, nil, false) -- 2 columns: Label + Buttons
         imgui.SetColumnWidth(0, 180)
 
         for i, entry in ipairs(M.options.custom_order) do
             imgui.PushID(i)
-
-            -- First column: name/filler label
-            imgui.Text(entry.type == "filler" and "~~~~~~~~~" or (M.peers[entry.id] and M.peers[entry.id].name or entry.id))
+            if entry.type == "filler" then
+                entry.filler_text = entry.filler_text or M.options.filler_char
+                local new_text, changed = imgui.InputText("##fillertext_"..i, entry.filler_text)
+                if changed then
+                    entry.filler_text = new_text
+                end
+                imgui.SameLine()
+                imgui.Text("Filler Row")
+            else
+                imgui.Text(M.peers[entry.id] and M.peers[entry.id].name or entry.id)
+            end
             imgui.NextColumn()
             local buttonSize = ImVec2(36, 0)
 
@@ -732,6 +741,11 @@ function M.draw_sort_editor()
 
         imgui.Columns(1) -- back to single-column layout
 
+        local new_filler, changed = imgui.InputText("Filler Characters", M.options.filler_char)
+        if changed then
+            M.options.filler_char = new_filler
+        end
+
         imgui.Separator()
         imgui.Text("Add Peer/Filler Row:")
 
@@ -754,7 +768,10 @@ function M.draw_sort_editor()
         end
 
         if imgui.SmallButton("+ Add Filler Row") then
-            table.insert(M.options.custom_order, {type="filler"})
+            table.insert(M.options.custom_order, {
+                type = "filler",
+                filler_text = M.options.filler_char
+            })
         end
 
         imgui.Separator()
