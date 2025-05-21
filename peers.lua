@@ -706,8 +706,6 @@ function M.draw_sort_editor()
                 if changed then
                     entry.filler_text = new_text
                 end
-                imgui.SameLine()
-                imgui.Text("Filler Row")
             else
                 imgui.Text(M.peers[entry.id] and M.peers[entry.id].name or entry.id)
             end

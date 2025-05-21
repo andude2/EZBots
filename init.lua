@@ -64,7 +64,7 @@ local function DrawPlayerStats()
     imgui.Text(hpText)
     imgui.SameLine(75)
     imgui.TextColored(ImVec4(0.6, 0.8, 1, 1), manaText) -- Blue-ish for Mana
-    imgui.SameLine(150)
+    imgui.SameLine(160)
     imgui.TextColored(ImVec4(1, 0.7, 0.5, 1), endText) -- Orange-ish for Endurance
 end
 
