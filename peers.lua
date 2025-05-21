@@ -367,7 +367,7 @@ local function refreshPeers()
 
     M.peer_list = new_peer_list
 
-        local num_peer_rows = #M.peer_list
+    local num_peer_rows = #M.peer_list
     local num_class_title_rows = 0
 
     if M.options.sort_mode == "Class" and num_peer_rows > 0 then
