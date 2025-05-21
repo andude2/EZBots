@@ -180,7 +180,7 @@ local function handleDamageEvent(dmgAmount)
         dsCounter         = 0
         dmgTotalNonMelee  = 0
         nonMeleeCounter   = 0
-        print("[Peers] Combat started.")
+        --print("[Peers] Combat started.")
     end
     leftCombatTime = 0
     return tonumber(dmgAmount) or 0
@@ -234,7 +234,7 @@ local function checkCombatState()
         if leftCombatTime == 0 then
             -- First frame out of combat
             leftCombatTime = os.time()
-            print("[Peers] Combat ended (timer started).")
+            --print("[Peers] Combat ended (timer started).")
         end
         -- Check if timeout has expired
         if os.difftime(os.time(), leftCombatTime) > BATTLE_DURATION_S then
