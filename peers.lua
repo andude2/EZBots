@@ -546,8 +546,85 @@ function M.draw_peer_list()
                 end
                 imgui.EndTooltip()
             end
-            if not isSelf and imgui.IsItemClicked(ImGuiMouseButton.Right) then
-                targetCharacter(peer.name)
+            if imgui.BeginPopupContextItem(string.format("##PeerContext_%s", peer.id)) then
+                imgui.Text(peer.name)
+                imgui.Separator()
+
+                if isSelf then
+                    -- Self-only menu options
+                    if imgui.MenuItem("Follow Me") then
+                        mq.cmd('/aca /target id ${Me.ID}')
+                        mq.cmd('/aca /afollow on')
+                    end
+                    
+                    if imgui.MenuItem("Follow Off") then
+                        mq.cmd('/aca /afollow off')
+                    end
+                    
+                    imgui.Separator()
+                    
+                    if imgui.MenuItem("Come to Me") then
+                        mq.cmdf('/aca /nav spawn %s', peer.name)
+                    end
+                    
+                    if imgui.MenuItem("Stop Navigation") then
+                        mq.cmd('/aca /nav stop')
+                    end
+                    
+                    imgui.Separator()
+                    
+                    if imgui.MenuItem("Camp Here") then
+                        mq.cmd('/acaa /makecamp on')
+                    end
+                    
+                    if imgui.MenuItem("Camp Off") then
+                        mq.cmd('/acaa /makecamp off')
+                    end
+                    
+                    imgui.Separator()
+                    
+                    if imgui.MenuItem("Pause All") then
+                        mq.cmd('/acaa /mqpause on')
+                    end
+                    
+                    if imgui.MenuItem("Unpause All") then
+                        mq.cmd('/acaa /mqpause off')
+                    end
+                else
+                
+                    if imgui.MenuItem("Target") then
+                        targetCharacter(peer.name)
+                    end
+                    
+                    imgui.Separator()
+                    
+                    if imgui.MenuItem("Invite to Group") then
+                        mq.cmdf('/invite %s', peer.name)
+                    end
+                    
+                    if imgui.MenuItem("Invite to Raid") then
+                        mq.cmdf('/raidinvite %s', peer.name)
+                    end
+
+                    imgui.Separator()
+
+                    if imgui.MenuItem("Set as Main Assist") then
+                        mq.cmdf('/grouproles set %s 2', peer.name)
+                    end
+                    
+                    if imgui.MenuItem("Set as Main Tank") then
+                        mq.cmdf('/grouproles set %s 1', peer.name)
+                    end
+                    
+                    if imgui.MenuItem("Set as Puller") then
+                        mq.cmdf('/grouproles set %s 3', peer.name)
+                    end
+                    
+                    if imgui.MenuItem("Remove Group Role") then
+                        mq.cmdf('/grouproles unset %s', peer.name)
+                    end
+                end
+                imgui.EndPopup()
             end
         end
 

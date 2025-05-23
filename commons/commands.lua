@@ -16,6 +16,9 @@ local last_peer_refresh = 0
 local PEER_REFRESH_INTERVAL = 60
 local initialized = false
 
+local chase_mode = false
+local chase_target = nil
+
 local function peer_id()
     return mq.TLO.EverQuest.Server() .. '_' .. mq.TLO.Me.CleanName()
 end
@@ -210,11 +213,9 @@ function M.send(peer_or_list, command)
             for connectedPeer in pairs(connectedPeers) do
                 if connectedPeer:lower() == peer:lower() then
                     if debug_mode then
-                        print(string.format('[PeerCommand] Sending to %s: %s (case-insensitive match for %s)', 
-                                           connectedPeer, command, peer))
+                        print(string.format('[PeerCommand] Sending to %s: %s (case-insensitive match for %s)', connectedPeer, command, peer))
                     end
-                    actor:send({character = connectedPeer}, {type = 'Command', command = command}, 
-                              check_remove_peer(connectedPeer))
+                    actor:send({character = connectedPeer}, {type = 'Command', command = command}, check_remove_peer(connectedPeer))
                     return true
                 end
             end
@@ -455,5 +456,7 @@ function M.init()
 end
 
 M.init()
+
+M.update_chase = update_chase
 
 return M

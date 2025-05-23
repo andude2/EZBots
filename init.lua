@@ -77,6 +77,8 @@ local function CombinedUI()
         combinedUIInitialized = true
     end
 
+    if not mq.TLO.EverQuest.HWND() then return end
+    
     if peers.options.borderless then
         windowFlags = bit32.bor(ImGuiWindowFlags.NoTitleBar)
     else
