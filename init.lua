@@ -56,6 +56,23 @@ local function DrawPlayerStats()
 
     -- Layout similar to original
     imgui.TextColored(ImVec4(1, 1, 0.7, 1), string.format("Name: %s (Lvl %d)", name, level)) -- Combine Name/Level
+    imgui.SameLine()
+    
+        local buttonSize = 22
+        local spacing = 2
+        local windowWidth = imgui.GetWindowContentRegionWidth()
+
+        imgui.SameLine(windowWidth - (buttonSize * 2 + spacing * 2))
+        if imgui.SmallButton("-##fontScaleDown") then
+            peers.options.font_scale = math.max(0.5, peers.options.font_scale - 0.1)
+        end
+        imgui.SameLine()
+        if imgui.SmallButton("+##fontScaleUp") then
+            peers.options.font_scale = math.min(2.0, peers.options.font_scale + 0.1)
+        end
+        if imgui.IsItemHovered() then
+            imgui.SetTooltip("Adjust Font Scale")
+        end
 
     local hpText = string.format("HP: %.0f%%", pct_hp)
     local manaText = (max_mana > 0) and string.format("Mana: %.0f%%", pct_mana) or "Mana: N/A"
@@ -87,22 +104,6 @@ local function CombinedUI()
 
     -- Begin main window
     if imgui.Begin("EQ Hub", nil, windowFlags) then
-
-        local buttonSize = 22
-        local spacing = 2
-        local windowWidth = imgui.GetWindowContentRegionWidth()
-
-        imgui.SameLine(windowWidth - (buttonSize * 2 + spacing * 2))
-        if imgui.SmallButton("-##fontScaleDown") then
-            peers.options.font_scale = math.max(0.5, peers.options.font_scale - 0.1)
-        end
-        imgui.SameLine()
-        if imgui.SmallButton("+##fontScaleUp") then
-            peers.options.font_scale = math.min(2.0, peers.options.font_scale + 0.1)
-        end
-        if imgui.IsItemHovered() then
-            imgui.SetTooltip("Adjust Font Scale")
-        end
 
         if imgui.BeginPopupContextWindow("##HubContext", ImGuiPopupFlags.MouseButtonRight) then
 
