@@ -1,7 +1,7 @@
 -- peercommands.lua - centralized actor-based command system
 local mq = require('mq')
 local actors = require('actors')
-local json = require('dkjson')
+local json = require('commons.dkjson')
 
 local M = {}
 
