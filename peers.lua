@@ -125,7 +125,7 @@ function requestAAUpdate()
     if aa_said then
         return
     end
-    mq.cmd('/say AA')
+    mq.cmd('/say #AA')
     aa_said = true
 end
 
@@ -1098,7 +1098,7 @@ function M.init()
         
         -- Request initial AA update
         if not aa_said then
-            mq.cmd('/say AA')
+            mq.cmd('/say #AA')
             aa_said = true
         end
     else
