@@ -2,75 +2,83 @@
 -- Handles peer status, DPS tracking, and switching logic
 -- Enhanced with AA capture and number formatting
 
-local mq = require('mq')
-local imgui = require('ImGui')
-local actors = require('actors')
-local utils = require('commons.utils') -- Assuming utils.lua is available
-local json = require('commons.dkjson')
-local config = {}
-local config_path = string.format('%s/peer_ui_config.json', mq.configDir)
-local myName = mq.TLO.Me.CleanName() or "Unknown"
+-- ALGAR Edits: Endurance, PetHP
 
-local M = {} -- Module table
+local mq                   = require('mq')
+local Set                  = require('mq.set')
+local imgui                = require('ImGui')
+local actors               = require('actors')
+local utils                = require('commons.utils') -- Assuming utils.lua is available
+local json                 = require('commons.dkjson')
+local config               = {}
+local config_path          = string.format('%s/peer_ui_config.json', mq.configDir)
+local myName               = mq.TLO.Me.CleanName() or "Unknown"
+local enduranceUsers       = Set.new({ "BRD", "BST", "BER", "MNK", "PAL", "RNG", "ROG", "SHD", "WAR", })
+local manaUsers            = Set.new({ "BRD", "BST", "CLR", "DRU", "ENC", "MAG", "NEC", "PAL", "RNG", "SHD", "SHM", "WIZ", })
+local petClasses           = Set.new({ "BST", "DRU", "ENC", "MAG", "NEC", "SHD", "SHM", })
+
+local M                    = {} -- Module table
 
 -- Configuration
-local REFRESH_INTERVAL_MS = 1 -- How often to run the update loop (in ms)
-local PUBLISH_INTERVAL_S  = 0.2 -- How often to publish own status (in seconds)
-local STALE_DATA_TIMEOUT_S= 30  -- How long before peer data is considered stale (in seconds)
-local BATTLE_DURATION_S   = 5  -- How long after combat ends before DPS resets (in seconds)
-local FG_REFRESH_MS = 1      -- when we're foregrounded, run every millisecond
-local BG_REFRESH_MS = 200    -- background only needs 5Hz updates (200ms)
-local lastRefreshTime = 0    -- track in mq's high‐res clock
-local elapsed = os.clock  -- or mq.clock, whichever you use
+local REFRESH_INTERVAL_MS  = 1        -- How often to run the update loop (in ms)
+local PUBLISH_INTERVAL_S   = 0.2      -- How often to publish own status (in seconds)
+local STALE_DATA_TIMEOUT_S = 30       -- How long before peer data is considered stale (in seconds)
+local BATTLE_DURATION_S    = 5        -- How long after combat ends before DPS resets (in seconds)
+local FG_REFRESH_MS        = 1        -- when we're foregrounded, run every millisecond
+local BG_REFRESH_MS        = 200      -- background only needs 5Hz updates (200ms)
+local lastRefreshTime      = 0        -- track in mq's high‐res clock
+local elapsed              = os.clock -- or mq.clock, whichever you use
 
 -- State Variables
-M.peers      = {}       -- Stores data received from other peers [id] = {data}
-M.peer_list  = {}       -- Filtered and processed list of peers for display
-M.options = {           -- Options controlled by the main UI menu
-    sort_mode   = "Alphabetical", -- or "HP", "Distance", "DPS" (Add sorting logic if needed)
-    show_name     = true,
-    show_hp       = true,
-    show_mana     = true,
-    show_distance = true,
-    show_dps      = true,
-    show_target   = true,
-    show_combat   = true,
-    show_casting  = true,
-    borderless    = false,
+M.peers                    = {}         -- Stores data received from other peers [id] = {data}
+M.peer_list                = {}         -- Filtered and processed list of peers for display
+M.options                  = {          -- Options controlled by the main UI menu
+    sort_mode         = "Alphabetical", -- or "HP", "Distance", "DPS" (Add sorting logic if needed)
+    show_name         = true,
+    show_hp           = true,
+    show_end          = true,
+    show_mana         = true,
+    show_pethp        = true,
+    show_distance     = true,
+    show_dps          = true,
+    show_target       = true,
+    show_combat       = true,
+    show_casting      = true,
+    borderless        = false,
     show_player_stats = true,
-    use_class     = false,
-    font_scale = 1.0,
-    filler_char = "~ ~ ~ ~ ~",
+    use_class         = false,
+    font_scale        = 1.0,
+    filler_char       = "~ ~ ~ ~ ~",
 }
-M.show_aa_window = { value = false } -- Control the visibility of the AA window
-M.show_sort_editor = { value = false }
+M.show_aa_window           = { value = false, } -- Control the visibility of the AA window
+M.show_sort_editor         = { value = false, }
 
-local lastPeerCount    = 0
-local cachedPeerHeight = 300 -- Default height
-local lastUpdateTime   = {} -- [id] = timestamp of last message received
-local lastPublishTime  = 0  -- Timestamp of last published message
-local actor_mailbox    = nil
-local MyName = utils.safeTLO(mq.TLO.Me.CleanName, "Unknown")
-local MyServer = utils.safeTLO(mq.TLO.EverQuest.Server, "Unknown")
+local lastPeerCount        = 0
+local cachedPeerHeight     = 300 -- Default height
+local lastUpdateTime       = {}  -- [id] = timestamp of last message received
+local lastPublishTime      = 0   -- Timestamp of last published message
+local actor_mailbox        = nil
+local MyName               = utils.safeTLO(mq.TLO.Me.CleanName, "Unknown")
+local MyServer             = utils.safeTLO(mq.TLO.EverQuest.Server, "Unknown")
 
 -- AA Tracking Variables (NEW)
-local actualAAPoints = nil -- Stores the actual AA from chat, nil if not captured yet
-local lastAACheckTime = 0  -- Timestamp of last AA check
-local AA_CHECK_INTERVAL = 300 -- Check AA every 5 minutes (300 seconds)
-local aa_said = false
+local actualAAPoints       = nil -- Stores the actual AA from chat, nil if not captured yet
+local lastAACheckTime      = 0   -- Timestamp of last AA check
+local AA_CHECK_INTERVAL    = 300 -- Check AA every 5 minutes (300 seconds)
+local aa_said              = false
 
 -- DPS Tracking Variables
-local dmgTotalBattle    = 0
-local dmgBattCounter    = 0
-local critTotalBattle   = 0
-local critHealsTotal    = 0 -- Note: Crit heals aren't DPS but were tracked
-local dmgTotalDS        = 0
-local dsCounter         = 0
-local dmgTotalNonMelee  = 0
-local nonMeleeCounter   = 0
-local battleStartTime   = 0 -- Timestamp combat started
-local enteredCombat     = false
-local leftCombatTime    = 0 -- Timestamp combat ended
+local dmgTotalBattle       = 0
+local dmgBattCounter       = 0
+local critTotalBattle      = 0
+local critHealsTotal       = 0 -- Note: Crit heals aren't DPS but were tracked
+local dmgTotalDS           = 0
+local dsCounter            = 0
+local dmgTotalNonMelee     = 0
+local nonMeleeCounter      = 0
+local battleStartTime      = 0 -- Timestamp combat started
+local enteredCombat        = false
+local leftCombatTime       = 0 -- Timestamp combat ended
 
 -------------------------------------------
 ---AA Functions with Server-Specific Logic (NEW)
@@ -82,8 +90,8 @@ local function isEZLinuxServer()
 end
 
 local function aaGainCallback(line, totalAmount)
-    local cleanTotal = string.gsub(totalAmount, ",", "")  -- Remove commas
-    local total = tonumber(cleanTotal)  -- Convert to number
+    local cleanTotal = string.gsub(totalAmount, ",", "") -- Remove commas
+    local total = tonumber(cleanTotal)                   -- Convert to number
 
     if total then
         actualAAPoints = total
@@ -121,7 +129,7 @@ function requestAAUpdate()
     if not isEZLinuxServer() then
         return -- Don't request AA updates on non-EZ servers
     end
-    
+
     if aa_said then
         return
     end
@@ -153,12 +161,23 @@ local function getHealthColor(percent)
     end
 end
 
-local function getManaColor(percent)
+local function getEnduranceColor(percent)
     percent = percent or 0
     if percent < 35 then
         return ImVec4(0.5, 0.5, 0, 1) -- Red
     elseif percent < 75 then
-        return ImVec4(1, 1, 0, 1) -- Yellow
+        return ImVec4(1, 1, 0, 1)     -- Yellow
+    else
+        return ImVec4(1, 0.7, 0.5, 1) -- Orangish
+    end
+end
+
+local function getManaColor(percent)
+    percent = percent or 0
+    if percent < 35 then
+        return ImVec4(0.5, 0.5, 0, 1)         -- Red
+    elseif percent < 75 then
+        return ImVec4(1, 1, 0, 1)             -- Yellow
     else
         return ImVec4(0.678, 0.847, 0.902, 1) -- Light Blue
     end
@@ -185,15 +204,17 @@ local function publishHealthStatus()
         print('\ar[Peers] Actor mailbox not initialized. Cannot publish status.\ax')
         return
     end
-    
+
     -- Request AA update for EZ Linux servers (NEW)
     requestAAUpdate()
-    
+
     local status = {
         name = MyName,
         server = MyServer,
         hp = utils.safeTLO(mq.TLO.Me.PctHPs, 0),
+        endurance = utils.safeTLO(mq.TLO.Me.PctEndurance, 0),
         mana = utils.safeTLO(mq.TLO.Me.PctMana, 0),
+        pethp = utils.safeTLO(mq.TLO.Me.Pet.PctHPs, 0),
         zone = utils.safeTLO(mq.TLO.Zone.ShortName, "unknown"),
         distance = 0,
         dps = calculateCurrentDPS(),
@@ -201,9 +222,9 @@ local function publishHealthStatus()
         target = utils.safeTLO(mq.TLO.Target.CleanName, "None"),
         combat_state = utils.safeTLO(mq.TLO.Me.Combat, FALSE),
         casting = utils.safeTLO(mq.TLO.Me.Casting, "None"),
-        class = utils.safeTLO(mq.TLO.Me.Class.ShortName, "Unknown")
+        class = utils.safeTLO(mq.TLO.Me.Class.ShortName, "Unknown"),
     }
-    actor_mailbox:send({ mailbox = 'peer_status' }, status)
+    actor_mailbox:send({ mailbox = 'peer_status', }, status)
     lastPublishTime = currentTime
 end
 
@@ -226,7 +247,9 @@ local function peer_message_handler(message)
         name = content.name,
         server = content.server,
         hp = content.hp or 0,
+        endurance = content.endurance or 0,
         mana = content.mana or 0,
+        pethp = content.pethp or 0,
         zone = content.zone or "unknown",
         dps = content.dps or 0,
         aa = content.aa or 0,
@@ -244,18 +267,18 @@ end
 -- DPS Event Callbacks
 local function handleDamageEvent(dmgAmount)
     if not enteredCombat then
-        enteredCombat   = true
-        battleStartTime = os.time()
-        leftCombatTime  = 0
+        enteredCombat    = true
+        battleStartTime  = os.time()
+        leftCombatTime   = 0
         -- Reset counters
-        dmgTotalBattle    = 0
-        dmgBattCounter    = 0
-        critTotalBattle   = 0
-        critHealsTotal    = 0
-        dmgTotalDS        = 0
-        dsCounter         = 0
-        dmgTotalNonMelee  = 0
-        nonMeleeCounter   = 0
+        dmgTotalBattle   = 0
+        dmgBattCounter   = 0
+        critTotalBattle  = 0
+        critHealsTotal   = 0
+        dmgTotalDS       = 0
+        dsCounter        = 0
+        dmgTotalNonMelee = 0
+        nonMeleeCounter  = 0
         --print("[Peers] Combat started.")
     end
     leftCombatTime = 0
@@ -291,11 +314,11 @@ local function nonMeleeCallBack(line, targetOrYou, dmgStr)
         type = "dShield"
         dmgTotalDS = dmgTotalDS + dmg
         dsCounter = dsCounter + 1
-    -- Hit *by* non-melee (taken damage)
+        -- Hit *by* non-melee (taken damage)
     elseif string.find(line, "You were hit by non-melee for") then
         type = "hit-by-non-melee"
         -- Do not add damage taken to your outgoing DPS totals
-    -- Standard non-melee hit dealt by you
+        -- Standard non-melee hit dealt by you
     else
         dmgTotalNonMelee = dmgTotalNonMelee + dmg
         nonMeleeCounter = nonMeleeCounter + 1
@@ -315,18 +338,18 @@ local function checkCombatState()
         -- Check if timeout has expired
         if os.difftime(os.time(), leftCombatTime) > BATTLE_DURATION_S then
             print("[Peers] Combat DPS reset.")
-            enteredCombat   = false
-            battleStartTime = 0
-            leftCombatTime  = 0
+            enteredCombat    = false
+            battleStartTime  = 0
+            leftCombatTime   = 0
             -- Reset totals (optional, could keep last fight stats)
-            dmgTotalBattle    = 0
-            dmgBattCounter    = 0
-            critTotalBattle   = 0
-            critHealsTotal    = 0
-            dmgTotalDS        = 0
-            dsCounter         = 0
-            dmgTotalNonMelee  = 0
-            nonMeleeCounter   = 0
+            dmgTotalBattle   = 0
+            dmgBattCounter   = 0
+            critTotalBattle  = 0
+            critHealsTotal   = 0
+            dmgTotalDS       = 0
+            dsCounter        = 0
+            dmgTotalNonMelee = 0
+            nonMeleeCounter  = 0
         end
     elseif currentCombatState == 'TRUE' and enteredCombat then
         -- If we dip out and back in quickly, reset the leftCombatTime
@@ -363,7 +386,9 @@ local function refreshPeers()
     -- Update self entry in peers table (always refresh the AA value) (CHANGED)
     if M.peers[my_entry_id] then
         M.peers[my_entry_id].hp = utils.safeTLO(mq.TLO.Me.PctHPs, 0)
+        M.peers[my_entry_id].endurance = utils.safeTLO(mq.TLO.Me.PctEndurance, 0)
         M.peers[my_entry_id].mana = utils.safeTLO(mq.TLO.Me.PctMana, 0)
+        M.peers[my_entry_id].pethp = utils.safeTLO(mq.TLO.Me.Pet.PctHPs, 0)
         M.peers[my_entry_id].zone = myCurrentZone
         M.peers[my_entry_id].dps = calculateCurrentDPS()
         M.peers[my_entry_id].aa = getActualAAPoints() -- Use enhanced AA function
@@ -381,7 +406,9 @@ local function refreshPeers()
             name = MyName,
             server = MyServer,
             hp = utils.safeTLO(mq.TLO.Me.PctHPs, 0),
+            endurance = utils.safeTLO(mq.TLO.Me.PctEndurance, 0),
             mana = utils.safeTLO(mq.TLO.Me.PctMana, 0),
+            pethp = utils.safeTLO(mq.TLO.Me.Pet.PctHPs, 0),
             zone = myCurrentZone,
             dps = calculateCurrentDPS(),
             aa = getActualAAPoints(), -- Use enhanced AA function
@@ -391,7 +418,7 @@ local function refreshPeers()
             last_update = currentTime,
             distance = 0,
             inSameZone = true,
-            class = utils.safeTLO(mq.TLO.Me.Class.ShortName, "unknown")
+            class = utils.safeTLO(mq.TLO.Me.Class.ShortName, "unknown"),
         }
     end
     table.insert(new_peer_list, M.peers[my_entry_id])
@@ -447,7 +474,7 @@ local function refreshPeers()
             if entry.type == "filler" then
                 table.insert(new_peer_list, {
                     type        = "filler",
-                    filler_text = entry.filler_text or M.options.filler_char
+                    filler_text = entry.filler_text or M.options.filler_char,
                 })
             else
                 local peer = id_to_peer[entry.id]
@@ -474,14 +501,14 @@ local function refreshPeers()
     local single_data_row_height = imgui.GetTextLineHeight() + (imgui.GetStyle().CellPadding.y * 2)
     local table_header_actual_row_height = single_data_row_height + 2
     local new_calculated_height = 0
-    if num_peer_rows > 0 or num_class_title_rows > 0 then 
-        new_calculated_height = new_calculated_height + table_header_actual_row_height 
+    if num_peer_rows > 0 or num_class_title_rows > 0 then
+        new_calculated_height = new_calculated_height + table_header_actual_row_height
     end
 
     new_calculated_height = new_calculated_height + (num_peer_rows * single_data_row_height)
-    new_calculated_height = new_calculated_height + (num_class_title_rows * single_data_row_height) 
+    new_calculated_height = new_calculated_height + (num_class_title_rows * single_data_row_height)
 
-    if new_calculated_height > 0 then 
+    if new_calculated_height > 0 then
         new_calculated_height = new_calculated_height + (imgui.GetStyle().FramePadding.y)
     end
 
@@ -523,13 +550,15 @@ function M.draw_peer_list()
         column_count = column_count + 1
         first_column_is_name_or_class = true
     end
-    if M.options.show_hp       then column_count = column_count + 1 end
-    if M.options.show_mana     then column_count = column_count + 1 end
+    if M.options.show_hp then column_count = column_count + 1 end
+    if M.options.show_endurance then column_count = column_count + 1 end
+    if M.options.show_mana then column_count = column_count + 1 end
+    if M.options.show_pethp then column_count = column_count + 1 end
     if M.options.show_distance then column_count = column_count + 1 end
-    if M.options.show_dps      then column_count = column_count + 1 end
-    if M.options.show_target   then column_count = column_count + 1 end
-    if M.options.show_combat   then column_count = column_count + 1 end
-    if M.options.show_casting  then column_count = column_count + 1 end
+    if M.options.show_dps then column_count = column_count + 1 end
+    if M.options.show_target then column_count = column_count + 1 end
+    if M.options.show_combat then column_count = column_count + 1 end
+    if M.options.show_casting then column_count = column_count + 1 end
 
     if column_count == 0 then
         imgui.Text("No columns selected for Peer Switcher.")
@@ -557,7 +586,9 @@ function M.draw_peer_list()
         imgui.TableSetupColumn(header_text, ImGuiTableColumnFlags.Sortable, ImGuiTableColumnFlags.WidthFixed, 150)
     end
     if M.options.show_hp then imgui.TableSetupColumn("HP", ImGuiTableColumnFlags.WidthFixed, 45) end
+    if M.options.show_endurance then imgui.TableSetupColumn("End", ImGuiTableColumnFlags.WidthFixed, 45) end
     if M.options.show_mana then imgui.TableSetupColumn("Mana", ImGuiTableColumnFlags.WidthFixed, 45) end
+    if M.options.show_pethp then imgui.TableSetupColumn("PetHP", ImGuiTableColumnFlags.WidthFixed, 45) end
     if M.options.show_distance then imgui.TableSetupColumn("Dist", ImGuiTableColumnFlags.Sortable, ImGuiTableColumnFlags.WidthFixed, 45) end
     if M.options.show_dps then imgui.TableSetupColumn("DPS", ImGuiTableColumnFlags.Sortable, ImGuiTableColumnFlags.WidthFixed, 45) end
     if M.options.show_target then imgui.TableSetupColumn("Target", ImGuiTableColumnFlags.WidthFixed, 100) end
@@ -587,8 +618,8 @@ function M.draw_peer_list()
             imgui.TableNextRow()
             imgui.TableNextColumn()
             local text = peer.filler_text or M.options.filler_char
-            imgui.PushStyleColor(ImGuiCol.Text, ImVec4(0.4,0.6,0.9,0.65))
-                imgui.Text(text)
+            imgui.PushStyleColor(ImGuiCol.Text, ImVec4(0.4, 0.6, 0.9, 0.65))
+            imgui.Text(text)
             imgui.PopStyleColor()
             for i = 2, column_count do
                 imgui.TableNextColumn()
@@ -602,8 +633,8 @@ function M.draw_peer_list()
         if first_column_is_name_or_class then
             imgui.TableNextColumn()
             local isSelf = (peer.name == MyName and peer.server == MyServer)
-            local zoneColor = peer.inSameZone and ImVec4(0.8,1,0.8,1) or ImVec4(1,0.7,0.7,1)
-            if isSelf then zoneColor = ImVec4(1,1,0.7,1) end
+            local zoneColor = peer.inSameZone and ImVec4(0.8, 1, 0.8, 1) or ImVec4(1, 0.7, 0.7, 1)
+            if isSelf then zoneColor = ImVec4(1, 1, 0.7, 1) end
             imgui.PushStyleColor(ImGuiCol.Text, zoneColor)
 
             local displayValue = peer.name
@@ -619,12 +650,12 @@ function M.draw_peer_list()
 
             if imgui.IsItemHovered() then
                 imgui.BeginTooltip()
-                imgui.Text("Name : %s",  peer.name)
-                imgui.Text("Class: %s",  peer.class or "Unknown")
+                imgui.Text("Name : %s", peer.name)
+                imgui.Text("Class: %s", peer.class or "Unknown")
                 imgui.Text("Zone: %s", peer.zone or "Unknown")
                 if not isSelf then
                     imgui.Text("Left-click : Switch to %s", peer.name)
-                    imgui.Text("Right-click: Target %s",   peer.name)
+                    imgui.Text("Right-click: Target %s", peer.name)
                 end
                 imgui.EndTooltip()
             end
@@ -637,52 +668,51 @@ function M.draw_peer_list()
                         mq.cmd('/aca /target id ${Me.ID}')
                         mq.cmd('/aca /afollow on')
                     end
-                    
+
                     if imgui.MenuItem("Follow Off") then
                         mq.cmd('/aca /afollow off')
                     end
-                    
+
                     imgui.Separator()
-                    
+
                     if imgui.MenuItem("Come to Me") then
                         mq.cmdf('/aca /nav spawn %s', peer.name)
                     end
-                    
+
                     if imgui.MenuItem("Stop Navigation") then
                         mq.cmd('/aca /nav stop')
                     end
-                    
+
                     imgui.Separator()
-                    
+
                     if imgui.MenuItem("Camp Here") then
                         mq.cmd('/acaa /makecamp on')
                     end
-                    
+
                     if imgui.MenuItem("Camp Off") then
                         mq.cmd('/acaa /makecamp off')
                     end
-                    
+
                     imgui.Separator()
-                    
+
                     if imgui.MenuItem("Pause All") then
                         mq.cmd('/acaa /mqpause on')
                     end
-                    
+
                     if imgui.MenuItem("Unpause All") then
                         mq.cmd('/acaa /mqpause off')
                     end
                 else
-                
                     if imgui.MenuItem("Target") then
                         targetCharacter(peer.name)
                     end
-                    
+
                     imgui.Separator()
-                    
+
                     if imgui.MenuItem("Invite to Group") then
                         mq.cmdf('/invite %s', peer.name)
                     end
-                    
+
                     if imgui.MenuItem("Invite to Raid") then
                         mq.cmdf('/raidinvite %s', peer.name)
                     end
@@ -692,15 +722,15 @@ function M.draw_peer_list()
                     if imgui.MenuItem("Set as Main Assist") then
                         mq.cmdf('/grouproles set %s 2', peer.name)
                     end
-                    
+
                     if imgui.MenuItem("Set as Main Tank") then
                         mq.cmdf('/grouproles set %s 1', peer.name)
                     end
-                    
+
                     if imgui.MenuItem("Set as Puller") then
                         mq.cmdf('/grouproles set %s 3', peer.name)
                     end
-                    
+
                     if imgui.MenuItem("Remove Group Role") then
                         mq.cmdf('/grouproles unset %s', peer.name)
                     end
@@ -718,12 +748,45 @@ function M.draw_peer_list()
             imgui.PopStyleColor()
         end
 
+        -- Endurance Column
+        if M.options.show_endurance then
+            imgui.TableNextColumn()
+            local usesEndurance = enduranceUsers:contains(peer.class)
+            local enduranceColor = getEnduranceColor(usesEndurance and peer.endurance or 999)
+            imgui.PushStyleColor(ImGuiCol.Text, enduranceColor)
+            if usesEndurance then
+                imgui.Text("%.0f%%", peer.endurance or 0)
+            else
+                imgui.Text("")
+            end
+            imgui.PopStyleColor()
+        end
+
         -- Mana Column
         if M.options.show_mana then
             imgui.TableNextColumn()
-            local manaColor = getManaColor(peer.mana)
+            local usesMana = manaUsers:contains(peer.class)
+            local manaColor = getManaColor(usesMana and peer.mana or 999)
             imgui.PushStyleColor(ImGuiCol.Text, manaColor)
-            imgui.Text("%.0f%%", peer.mana or 0)
+            if usesMana then
+                imgui.Text("%.0f%%", peer.mana or 0)
+            else
+                imgui.Text("")
+            end
+            imgui.PopStyleColor()
+        end
+
+        -- PetHP Column
+        if M.options.show_pethp then
+            imgui.TableNextColumn()
+            local petClass = petClasses:contains(peer.class)
+            local hpColor = (peer.pethp or 0) > 0 and getHealthColor(peer.pethp) or ImVec4(0.7, 0.7, 0.7, 1)
+            imgui.PushStyleColor(ImGuiCol.Text, hpColor)
+            if petClass then
+                imgui.Text("%.0f%%", peer.pethp or 0)
+            else
+                imgui.Text("")
+            end
             imgui.PopStyleColor()
         end
 
@@ -739,10 +802,14 @@ function M.draw_peer_list()
                 distText = "???"; distColor = ImVec4(1, 1, 0.6, 1)
             else
                 distText = string.format("%.0f", distance)
-                if distance < 20 then distColor = ImVec4(0.6,1,0.6,1)
-                elseif distance < 100 then distColor = ImVec4(0.8,1,0.8,1)
-                elseif distance < 175 then distColor = ImVec4(1,0.8,0.6,1)
-                else distColor = ImVec4(1,0.6,0.6,1)
+                if distance < 20 then
+                    distColor = ImVec4(0.6, 1, 0.6, 1)
+                elseif distance < 100 then
+                    distColor = ImVec4(0.8, 1, 0.8, 1)
+                elseif distance < 175 then
+                    distColor = ImVec4(1, 0.8, 0.6, 1)
+                else
+                    distColor = ImVec4(1, 0.6, 0.6, 1)
                 end
             end
             imgui.PushStyleColor(ImGuiCol.Text, distColor)
@@ -761,12 +828,12 @@ function M.draw_peer_list()
             imgui.TableNextColumn()
             local targetColor
             if M.options.show_combat then
-                targetColor = (peer.target == "None") and ImVec4(0.7,0.7,0.7,1) or ImVec4(1,1,1,1)
+                targetColor = (peer.target == "None") and ImVec4(0.7, 0.7, 0.7, 1) or ImVec4(1, 1, 1, 1)
             else
                 if peer.combat_state then
-                    targetColor = ImVec4(1,0,0,1)
+                    targetColor = ImVec4(1, 0, 0, 1)
                 else
-                    targetColor = (peer.target == "None") and ImVec4(0.7,0.7,0.7,1) or ImVec4(1,1,1,1)
+                    targetColor = (peer.target == "None") and ImVec4(0.7, 0.7, 0.7, 1) or ImVec4(1, 1, 1, 1)
                 end
             end
             imgui.PushStyleColor(ImGuiCol.Text, targetColor)
@@ -792,7 +859,7 @@ function M.draw_peer_list()
         -- Casting Column
         if M.options.show_casting then
             imgui.TableNextColumn()
-            local castingColor = (peer.casting == "None" or peer.casting == "") and ImVec4(0.7,0.7,0.7,1) or ImVec4(0.8,0.8,1,1)
+            local castingColor = (peer.casting == "None" or peer.casting == "") and ImVec4(0.7, 0.7, 0.7, 1) or ImVec4(0.8, 0.8, 1, 1)
             imgui.PushStyleColor(ImGuiCol.Text, castingColor)
             imgui.Text(peer.casting or "None")
             imgui.PopStyleColor()
@@ -816,7 +883,7 @@ function M.draw_aa_window()
         imgui.SameLine()
         imgui.TextDisabled("(" .. #M.peer_list .. " peers)")
         imgui.Separator()
-        
+
         -- Sort peers alphabetically by name
         local aa_list = {}
         for _, p in ipairs(M.peer_list) do table.insert(aa_list, p) end
@@ -825,22 +892,22 @@ function M.draw_aa_window()
             local name_b = (b.name or "Unknown"):lower()
             return name_a < name_b
         end)
-        
+
         local total_aa = 0
         for _, peer in ipairs(aa_list) do
             total_aa = total_aa + (peer.aa or 0)
         end
         local avg_aa = math.floor(total_aa / math.max(1, #aa_list))
-        
+
         -- Stats header
         imgui.Text("Total AA: " .. formatNumberWithCommas(total_aa))
         imgui.Text("Average AA: " .. formatNumberWithCommas(avg_aa))
         imgui.Separator()
-        
+
         local row_height = imgui.GetTextLineHeightWithSpacing()
         local max_rows = #aa_list
         local table_height = math.min(max_rows * row_height + 20, 400)
-        
+
         -- Begin clean table with 3 columns
         local tableFlags = bit32.bor(
             ImGuiTableFlags.Borders,
@@ -853,12 +920,12 @@ function M.draw_aa_window()
             imgui.TableSetupColumn("AA Points", ImGuiTableColumnFlags.WidthFixed, 90)
             imgui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 60) -- Empty header for suffix
             imgui.TableHeadersRow()
-            
+
             for _, peer in ipairs(aa_list) do
                 imgui.TableNextRow()
                 local aa_val = peer.aa or 0
                 local isSelf = (peer.name == MyName and peer.server == MyServer)
-                
+
                 -- Name Column
                 imgui.TableNextColumn()
                 if isSelf then
@@ -868,7 +935,7 @@ function M.draw_aa_window()
                 if isSelf then
                     imgui.PopStyleColor()
                 end
-                
+
                 -- AA Points Column
                 imgui.TableNextColumn()
                 local aa_text = formatNumberWithCommas(aa_val)
@@ -878,7 +945,7 @@ function M.draw_aa_window()
                 imgui.PushStyleColor(ImGuiCol.Text, ImVec4(0.7, 0.9, 1.0, 1.0)) -- Light blue
                 imgui.Text(aa_text)
                 imgui.PopStyleColor()
-                
+
                 -- Suffix Column
                 imgui.TableNextColumn()
                 local suffix = ""
@@ -897,7 +964,7 @@ function M.draw_aa_window()
         end
     end
     imgui.End()
-    
+
     if not window_open then
         M.show_aa_window.value = false
     end
@@ -920,7 +987,7 @@ function M.draw_sort_editor()
             imgui.PushID(i)
             if entry.type == "filler" then
                 entry.filler_text = entry.filler_text or M.options.filler_char
-                local new_text, changed = imgui.InputText("##fillertext_"..i, entry.filler_text)
+                local new_text, changed = imgui.InputText("##fillertext_" .. i, entry.filler_text)
                 if changed then
                     entry.filler_text = new_text
                 end
@@ -934,11 +1001,11 @@ function M.draw_sort_editor()
             imgui.PushStyleVar(ImGuiStyleVar.FramePadding, ImVec2(3, 2)) -- More readable padding
 
             if imgui.SmallButton("^", buttonSize) and i > 1 then
-                M.options.custom_order[i], M.options.custom_order[i-1] = M.options.custom_order[i-1], M.options.custom_order[i]
+                M.options.custom_order[i], M.options.custom_order[i - 1] = M.options.custom_order[i - 1], M.options.custom_order[i]
             end
             imgui.SameLine()
             if imgui.SmallButton("v", buttonSize) and i < #M.options.custom_order then
-                M.options.custom_order[i], M.options.custom_order[i+1] = M.options.custom_order[i+1], M.options.custom_order[i]
+                M.options.custom_order[i], M.options.custom_order[i + 1] = M.options.custom_order[i + 1], M.options.custom_order[i]
             end
             imgui.SameLine()
             if imgui.SmallButton("X", buttonSize) then
@@ -976,7 +1043,7 @@ function M.draw_sort_editor()
             if not in_order then
                 imgui.PushID(id)
                 if imgui.SmallButton(peer.name) then
-                    table.insert(M.options.custom_order, {id = id})
+                    table.insert(M.options.custom_order, { id = id, })
                 end
                 imgui.PopID()
                 imgui.SameLine()
@@ -986,7 +1053,7 @@ function M.draw_sort_editor()
         if imgui.SmallButton("+ Add Filler Row") then
             table.insert(M.options.custom_order, {
                 type = "filler",
-                filler_text = M.options.filler_char
+                filler_text = M.options.filler_char,
             })
         end
 
@@ -1032,7 +1099,7 @@ function M.save_config()
 
     file = io.open(config_path, "w")
     if file then
-        file:write(json.encode(all_config, { indent = true }))
+        file:write(json.encode(all_config, { indent = true, }))
         file:close()
         print(string.format("\ay[Peers] Saved UI config to %s\ax", config_path))
     else
@@ -1049,7 +1116,7 @@ function M.update()
     local targetInterval = isFG and FG_REFRESH_MS or BG_REFRESH_MS
 
     if now - lastRefreshTime >= targetInterval then
-        refreshPeers()           -- your heavy work (publish, UI updates, etc.)
+        refreshPeers() -- your heavy work (publish, UI updates, etc.)
         lastRefreshTime = now
     end
     checkCombatState()
@@ -1077,7 +1144,7 @@ function M.init()
         return
     end
     print("[Peers] Actor mailbox registered successfully.")
-    
+
     -- Register DPS events
     mq.event("melee_crit", "#*#You score a critical hit!#*#(#1#)#*#", critCallBack)
     mq.event("melee_crit2", "#*#You deliver a critical blast!#*#(#1#)#*#", critCallBack)
@@ -1089,22 +1156,22 @@ function M.init()
     mq.event("melee_damage_shield", "#*#was hit by non-melee for #2# points of damage#*#", nonMeleeCallBack)
     mq.event("melee_you_hit_non-melee", "#*#You were hit by non-melee for #2# damage#*#", nonMeleeCallBack)
     mq.event("melee_crit_heal", "#*#You perform an exceptional heal!#*#(#1#)#*#", critHealCallBack)
-    
+
     -- Only register AA events for EZ Linux server (NEW)
     if isEZLinuxServer() then
         mq.event("aa_display_capture", "Unspent AA: #1#", aaDisplayCallback)
         mq.event("aa_gain_capture", "#*#You now have #1# ability point(s)#*#", aaGainCallback)
         print("[Peers] DPS and AA events registered for EZ Linux server.")
-        
+
         -- Request initial AA update
         if not aa_said then
-            mq.cmd('/say #AA')
+            mq.cmd('/say AA')
             aa_said = true
         end
     else
         print("[Peers] DPS events registered. Using TLO for AA points on this server.")
     end
-    
+
     lastAACheckTime = os.time()
     refreshPeers()
     print("[Peers] Initialization complete.")
@@ -1116,7 +1183,7 @@ function M.get_peer_data()
         list = M.peer_list,
         count = #M.peer_list,
         my_aa = getActualAAPoints(), -- Use enhanced AA function (CHANGED)
-        cached_height = cachedPeerHeight
+        cached_height = cachedPeerHeight,
     }
 end
 
