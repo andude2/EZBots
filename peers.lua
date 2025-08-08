@@ -35,7 +35,7 @@ M.options                  = {          -- Options controlled by the main UI men
     sort_mode         = "Alphabetical", -- or "HP", "Distance", "Group" (Add sorting logic if needed)
     show_name         = true,
     show_hp           = true,
-    show_end          = true,
+    show_endurance    = true,
     show_mana         = true,
     show_pethp        = true,
     show_distance     = true,
@@ -171,14 +171,17 @@ local function getManaColor(percent)
 end
 
 local function get_groupstatus_text(peerName)
-    local statusText = "X"
-
-    if mq.TLO.Group.Members() > 0 and mq.TLO.Group.Member(peerName)() then
-        statusText = "F" .. (mq.TLO.Group.Member(peerName).Index() + 1)
-    elseif mq.TLO.Raid.Members() > 0 and mq.TLO.Raid.Member(peerName)() then
-        statusText = "G" .. mq.TLO.Raid.Member(peerName).Group()
+    if peerName == mq.TLO.Me.DisplayName() then
+        return "F1"
     end
-    return statusText
+    if mq.TLO.Group.Members() > 0 and mq.TLO.Group.Member(peerName)() then
+        return "F" .. (mq.TLO.Group.Member(peerName).Index() + 1)
+    end
+    if mq.TLO.Raid.Members() > 0 and mq.TLO.Raid.Member(peerName)() then
+        return "G" .. mq.TLO.Raid.Member(peerName).Group()
+    end
+
+    return "X"
 end
 
 local function publishHealthStatus()
@@ -311,6 +314,9 @@ local function refreshPeers()
 
     -- Process other peers (existing logic continues...)
     for id, data in pairs(M.peers) do
+        -- Add group status from the local client perspective for numbering
+        data.group_status = get_groupstatus_text(data.name)
+
         if id == my_entry_id then goto continue end
         if os.difftime(currentTime, data.last_update) <= STALE_DATA_TIMEOUT_S then
             data.inSameZone = (data.zone == myCurrentZone)
@@ -351,7 +357,7 @@ local function refreshPeers()
             return class_a:lower() < class_b:lower()
         end)
     elseif M.options.sort_mode == "Group" then
-        table.sort(new_peer_list, function(a, b) return (get_groupstatus_text(a.name or "")):lower() < (get_groupstatus_text(b.name or "")):lower() end)
+        table.sort(new_peer_list, function(a, b) return a.group_status:lower() < b.group_status:lower() end)
     elseif M.options.sort_mode == "Custom" then
         local custom_order = M.options.custom_order or {}
         local id_to_peer = {}; for _, p in ipairs(new_peer_list) do id_to_peer[p.id] = p end
@@ -744,7 +750,7 @@ function M.draw_peer_list()
         -- Group Status Column
         if M.options.show_group then
             imgui.TableNextColumn()
-            local statusText = get_groupstatus_text(peer.name or "None")
+            local statusText = peer.group_status
             local statusColor = statusText == "X" and ImVec4(1, 0.7, 0.7, 1) or ImVec4(0.8, 0.8, 1, 1)
             imgui.PushStyleColor(ImGuiCol.Text, statusColor)
             imgui.Text(statusText)
