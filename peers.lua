@@ -171,14 +171,22 @@ local function getManaColor(percent)
 end
 
 local function get_groupstatus_text(peerName)
-    if peerName == mq.TLO.Me.DisplayName() then
+    if peerName == MyName then
         return "F1"
     end
-    if mq.TLO.Group.Members() > 0 and mq.TLO.Group.Member(peerName)() then
-        return "F" .. (mq.TLO.Group.Member(peerName).Index() + 1)
+
+    if mq.TLO.Group.Members() > 0 then
+        local groupMember = mq.TLO.Group.Member(peerName)
+        if groupMember() then
+            return "F" .. (groupMember.Index() + 1)
+        end
     end
-    if mq.TLO.Raid.Members() > 0 and mq.TLO.Raid.Member(peerName)() then
-        return "G" .. mq.TLO.Raid.Member(peerName).Group()
+
+    if mq.TLO.Raid.Members() > 0 then
+        local raidMember = mq.TLO.Raid.Member(peerName)
+        if raidMember() then
+            return "G" .. raidMember.Group()
+        end
     end
 
     return "X"
