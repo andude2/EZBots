@@ -1,5 +1,5 @@
 -- peers.lua
--- Handles peer status, DPS tracking, and switching logic
+-- Handles peer status and switching logic
 -- Enhanced with AA capture and number formatting
 
 -- ALGAR Edits: Endurance, PetHP
@@ -23,7 +23,6 @@ local M                    = {} -- Module table
 local REFRESH_INTERVAL_MS  = 1        -- How often to run the update loop (in ms)
 local PUBLISH_INTERVAL_S   = 0.2      -- How often to publish own status (in seconds)
 local STALE_DATA_TIMEOUT_S = 30       -- How long before peer data is considered stale (in seconds)
-local BATTLE_DURATION_S    = 5        -- How long after combat ends before DPS resets (in seconds)
 local FG_REFRESH_MS        = 1        -- when we're foregrounded, run every millisecond
 local BG_REFRESH_MS        = 200      -- background only needs 5Hz updates (200ms)
 local lastRefreshTime      = 0        -- track in mq's high‐res clock
@@ -33,17 +32,17 @@ local elapsed              = os.clock -- or mq.clock, whichever you use
 M.peers                    = {}         -- Stores data received from other peers [id] = {data}
 M.peer_list                = {}         -- Filtered and processed list of peers for display
 M.options                  = {          -- Options controlled by the main UI menu
-    sort_mode         = "Alphabetical", -- or "HP", "Distance", "DPS" (Add sorting logic if needed)
+    sort_mode         = "Alphabetical", -- or "HP", "Distance", "Group" (Add sorting logic if needed)
     show_name         = true,
     show_hp           = true,
     show_end          = true,
     show_mana         = true,
     show_pethp        = true,
     show_distance     = true,
-    show_dps          = true,
     show_target       = true,
     show_combat       = true,
     show_casting      = true,
+    show_group        = true,
     borderless        = false,
     show_player_stats = true,
     use_class         = false,
@@ -67,18 +66,6 @@ local lastAACheckTime      = 0   -- Timestamp of last AA check
 local AA_CHECK_INTERVAL    = 300 -- Check AA every 5 minutes (300 seconds)
 local aa_said              = false
 
--- DPS Tracking Variables
-local dmgTotalBattle       = 0
-local dmgBattCounter       = 0
-local critTotalBattle      = 0
-local critHealsTotal       = 0 -- Note: Crit heals aren't DPS but were tracked
-local dmgTotalDS           = 0
-local dsCounter            = 0
-local dmgTotalNonMelee     = 0
-local nonMeleeCounter      = 0
-local battleStartTime      = 0 -- Timestamp combat started
-local enteredCombat        = false
-local leftCombatTime       = 0 -- Timestamp combat ended
 
 -------------------------------------------
 ---AA Functions with Server-Specific Logic (NEW)
@@ -125,7 +112,7 @@ local function getActualAAPoints()
     end
 end
 
-function requestAAUpdate()
+local function requestAAUpdate()
     if not isEZLinuxServer() then
         return -- Don't request AA updates on non-EZ servers
     end
@@ -183,16 +170,15 @@ local function getManaColor(percent)
     end
 end
 
--- Helper: Calculate current DPS
-local function calculateCurrentDPS()
-    if not enteredCombat or battleStartTime <= 0 then return 0 end
+local function get_groupstatus_text(peerName)
+    local statusText = "X"
 
-    local currentTime = os.time()
-    local duration = currentTime - battleStartTime
-    if duration <= 0 then return 0 end -- Avoid division by zero
-
-    local totalDmg = dmgTotalBattle + dmgTotalDS + dmgTotalNonMelee
-    return totalDmg / duration
+    if mq.TLO.Group.Members() > 0 and mq.TLO.Group.Member(peerName)() then
+        statusText = "F" .. (mq.TLO.Group.Member(peerName).Index() + 1)
+    elseif mq.TLO.Raid.Members() > 0 and mq.TLO.Raid.Member(peerName)() then
+        statusText = "G" .. mq.TLO.Raid.Member(peerName).Group()
+    end
+    return statusText
 end
 
 local function publishHealthStatus()
@@ -217,7 +203,6 @@ local function publishHealthStatus()
         pethp = utils.safeTLO(mq.TLO.Me.Pet.PctHPs, 0),
         zone = utils.safeTLO(mq.TLO.Zone.ShortName, "unknown"),
         distance = 0,
-        dps = calculateCurrentDPS(),
         aa = getActualAAPoints(), -- Use enhanced AA function (CHANGED)
         target = utils.safeTLO(mq.TLO.Target.CleanName, "None"),
         combat_state = utils.safeTLO(mq.TLO.Me.Combat, FALSE),
@@ -251,7 +236,6 @@ local function peer_message_handler(message)
         mana = content.mana or 0,
         pethp = content.pethp or 0,
         zone = content.zone or "unknown",
-        dps = content.dps or 0,
         aa = content.aa or 0,
         target = content.target or "None",
         combat_state = content.combat_state == true or content.combat_state == "TRUE" or false,
@@ -262,102 +246,6 @@ local function peer_message_handler(message)
         class = content.class or "Unknown",
     }
     lastUpdateTime[id] = currentTime
-end
-
--- DPS Event Callbacks
-local function handleDamageEvent(dmgAmount)
-    if not enteredCombat then
-        enteredCombat    = true
-        battleStartTime  = os.time()
-        leftCombatTime   = 0
-        -- Reset counters
-        dmgTotalBattle   = 0
-        dmgBattCounter   = 0
-        critTotalBattle  = 0
-        critHealsTotal   = 0
-        dmgTotalDS       = 0
-        dsCounter        = 0
-        dmgTotalNonMelee = 0
-        nonMeleeCounter  = 0
-        --print("[Peers] Combat started.")
-    end
-    leftCombatTime = 0
-    return tonumber(dmgAmount) or 0
-end
-
-local function meleeCallBack(line, dType, target, dmgStr)
-    if string.find(line, "have been healed") then return end
-    if string.find(line, "but miss") or string.find(line, "but misses") then return end
-
-    local dmg = handleDamageEvent(dmgStr)
-    dmgTotalBattle = dmgTotalBattle + dmg
-    dmgBattCounter = dmgBattCounter + 1
-end
-
-local function critCallBack(line, dmgStr)
-    local dmg = handleDamageEvent(dmgStr)
-    critTotalBattle = critTotalBattle + dmg
-end
-
-local function critHealCallBack(line, dmgStr)
-    -- Crit heals don't contribute to dealt DPS.
-    local dmg = handleDamageEvent(dmgStr) -- Still resets combat timer if needed
-    critHealsTotal = critHealsTotal + dmg
-end
-
-local function nonMeleeCallBack(line, targetOrYou, dmgStr)
-    local dmg = handleDamageEvent(dmgStr)
-    local type = "non-melee" -- Default: Spell/proc damage dealt by you
-
-    -- Damage Shield (target hit by non-melee means your DS hit them)
-    if string.find(line, "was hit by non-melee for") then
-        type = "dShield"
-        dmgTotalDS = dmgTotalDS + dmg
-        dsCounter = dsCounter + 1
-        -- Hit *by* non-melee (taken damage)
-    elseif string.find(line, "You were hit by non-melee for") then
-        type = "hit-by-non-melee"
-        -- Do not add damage taken to your outgoing DPS totals
-        -- Standard non-melee hit dealt by you
-    else
-        dmgTotalNonMelee = dmgTotalNonMelee + dmg
-        nonMeleeCounter = nonMeleeCounter + 1
-    end
-end
-
--- Combat State Management
-local function checkCombatState()
-    local currentCombatState = utils.safeTLO(mq.TLO.Me.CombatState, "UNKNOWN")
-
-    if currentCombatState ~= 'TRUE' and enteredCombat then
-        if leftCombatTime == 0 then
-            -- First frame out of combat
-            leftCombatTime = os.time()
-            --print("[Peers] Combat ended (timer started).")
-        end
-        -- Check if timeout has expired
-        if os.difftime(os.time(), leftCombatTime) > BATTLE_DURATION_S then
-            print("[Peers] Combat DPS reset.")
-            enteredCombat    = false
-            battleStartTime  = 0
-            leftCombatTime   = 0
-            -- Reset totals (optional, could keep last fight stats)
-            dmgTotalBattle   = 0
-            dmgBattCounter   = 0
-            critTotalBattle  = 0
-            critHealsTotal   = 0
-            dmgTotalDS       = 0
-            dsCounter        = 0
-            dmgTotalNonMelee = 0
-            nonMeleeCounter  = 0
-        end
-    elseif currentCombatState == 'TRUE' and enteredCombat then
-        -- If we dip out and back in quickly, reset the leftCombatTime
-        if leftCombatTime ~= 0 then
-            print("[Peers] Re-entered combat.")
-            leftCombatTime = 0
-        end
-    end
 end
 
 -- Peer List Management
@@ -390,7 +278,6 @@ local function refreshPeers()
         M.peers[my_entry_id].mana = utils.safeTLO(mq.TLO.Me.PctMana, 0)
         M.peers[my_entry_id].pethp = utils.safeTLO(mq.TLO.Me.Pet.PctHPs, 0)
         M.peers[my_entry_id].zone = myCurrentZone
-        M.peers[my_entry_id].dps = calculateCurrentDPS()
         M.peers[my_entry_id].aa = getActualAAPoints() -- Use enhanced AA function
         M.peers[my_entry_id].target = utils.safeTLO(mq.TLO.Target.CleanName, "None")
         M.peers[my_entry_id].combat_state = utils.safeTLO(mq.TLO.Me.Combat, TRUE)
@@ -410,7 +297,6 @@ local function refreshPeers()
             mana = utils.safeTLO(mq.TLO.Me.PctMana, 0),
             pethp = utils.safeTLO(mq.TLO.Me.Pet.PctHPs, 0),
             zone = myCurrentZone,
-            dps = calculateCurrentDPS(),
             aa = getActualAAPoints(), -- Use enhanced AA function
             target = utils.safeTLO(mq.TLO.Target.CleanName, "None"),
             combat_state = utils.safeTLO(mq.TLO.Me.Combat, TRUE),
@@ -455,8 +341,6 @@ local function refreshPeers()
         table.sort(new_peer_list, function(a, b) return (a.hp or 0) < (b.hp or 0) end)
     elseif M.options.sort_mode == "Distance" then
         table.sort(new_peer_list, function(a, b) return (a.distance or 9999) < (b.distance or 9999) end)
-    elseif M.options.sort_mode == "DPS" then
-        table.sort(new_peer_list, function(a, b) return (a.dps or 0) > (b.dps or 0) end)
     elseif M.options.sort_mode == "Class" then
         table.sort(new_peer_list, function(a, b)
             local class_a = a.class or "Unknown"
@@ -466,6 +350,8 @@ local function refreshPeers()
             end
             return class_a:lower() < class_b:lower()
         end)
+    elseif M.options.sort_mode == "Group" then
+        table.sort(new_peer_list, function(a, b) return (get_groupstatus_text(a.name or "")):lower() < (get_groupstatus_text(b.name or "")):lower() end)
     elseif M.options.sort_mode == "Custom" then
         local custom_order = M.options.custom_order or {}
         local id_to_peer = {}; for _, p in ipairs(new_peer_list) do id_to_peer[p.id] = p end
@@ -555,10 +441,10 @@ function M.draw_peer_list()
     if M.options.show_mana then column_count = column_count + 1 end
     if M.options.show_pethp then column_count = column_count + 1 end
     if M.options.show_distance then column_count = column_count + 1 end
-    if M.options.show_dps then column_count = column_count + 1 end
     if M.options.show_target then column_count = column_count + 1 end
     if M.options.show_combat then column_count = column_count + 1 end
     if M.options.show_casting then column_count = column_count + 1 end
+    if M.options.show_group then column_count = column_count + 1 end
 
     if column_count == 0 then
         imgui.Text("No columns selected for Peer Switcher.")
@@ -590,10 +476,10 @@ function M.draw_peer_list()
     if M.options.show_mana then imgui.TableSetupColumn("Mana", ImGuiTableColumnFlags.WidthFixed, 45) end
     if M.options.show_pethp then imgui.TableSetupColumn("PetHP", ImGuiTableColumnFlags.WidthFixed, 45) end
     if M.options.show_distance then imgui.TableSetupColumn("Dist", ImGuiTableColumnFlags.Sortable, ImGuiTableColumnFlags.WidthFixed, 45) end
-    if M.options.show_dps then imgui.TableSetupColumn("DPS", ImGuiTableColumnFlags.Sortable, ImGuiTableColumnFlags.WidthFixed, 45) end
     if M.options.show_target then imgui.TableSetupColumn("Target", ImGuiTableColumnFlags.WidthFixed, 100) end
     if M.options.show_combat then imgui.TableSetupColumn("Combat", ImGuiTableColumnFlags.WidthFixed, 70) end
     if M.options.show_casting then imgui.TableSetupColumn("Casting", ImGuiTableColumnFlags.WidthFixed, 100) end
+    if M.options.show_group then imgui.TableSetupColumn("Group", ImGuiTableColumnFlags.Sortable, ImGuiTableColumnFlags.WidthFixed, 45) end
     imgui.TableHeadersRow()
 
     local current_drawn_class = nil
@@ -817,12 +703,6 @@ function M.draw_peer_list()
             imgui.PopStyleColor()
         end
 
-        -- DPS Column
-        if M.options.show_dps then
-            imgui.TableNextColumn()
-            imgui.Text(utils.cleanNumber(peer.dps or 0, 1, true))
-        end
-
         -- Target Column
         if M.options.show_target then
             imgui.TableNextColumn()
@@ -844,13 +724,9 @@ function M.draw_peer_list()
         -- Combat State Column
         if M.options.show_combat then
             imgui.TableNextColumn()
-            if peer.combat_state then
-                combatText = "Fighting"
-                combatColor = ImVec4(1, 0.7, 0.7, 1)
-            else
-                combatText = "Idle"
-                combatColor = ImVec4(1, 1, 0.7, 1)
-            end
+            local peerCombat = peer.combat_state
+            local combatText = peerCombat and "Fighting" or "Idle"
+            local combatColor = peerCombat and ImVec4(1, 0.7, 0.7, 1) or ImVec4(1, 1, 0.7, 1)
             imgui.PushStyleColor(ImGuiCol.Text, combatColor)
             imgui.Text(combatText)
             imgui.PopStyleColor()
@@ -862,6 +738,16 @@ function M.draw_peer_list()
             local castingColor = (peer.casting == "None" or peer.casting == "") and ImVec4(0.7, 0.7, 0.7, 1) or ImVec4(0.8, 0.8, 1, 1)
             imgui.PushStyleColor(ImGuiCol.Text, castingColor)
             imgui.Text(peer.casting or "None")
+            imgui.PopStyleColor()
+        end
+
+        -- Group Status Column
+        if M.options.show_group then
+            imgui.TableNextColumn()
+            local statusText = get_groupstatus_text(peer.name or "None")
+            local statusColor = statusText == "X" and ImVec4(1, 0.7, 0.7, 1) or ImVec4(0.8, 0.8, 1, 1)
+            imgui.PushStyleColor(ImGuiCol.Text, statusColor)
+            imgui.Text(statusText)
             imgui.PopStyleColor()
         end
         ::continue::
@@ -1119,7 +1005,6 @@ function M.update()
         refreshPeers() -- your heavy work (publish, UI updates, etc.)
         lastRefreshTime = now
     end
-    checkCombatState()
     publishHealthStatus() -- Publish own status periodically
     refreshPeers()        -- Refresh peer list, distances, and sorting
 end
@@ -1144,33 +1029,6 @@ function M.init()
         return
     end
     print("[Peers] Actor mailbox registered successfully.")
-
-    -- Register DPS events
-    mq.event("melee_crit", "#*#You score a critical hit!#*#(#1#)#*#", critCallBack)
-    mq.event("melee_crit2", "#*#You deliver a critical blast!#*#(#1#)#*#", critCallBack)
-    mq.event("melee_crit3", string.format("#*#%s scores a critical hit!#*#(#1#)#*#", MyName), critCallBack)
-    mq.event("melee_deadly_strike", string.format("#*#%s scores a Deadly Strike!#*#(#1#)#*#", MyName), critCallBack)
-    mq.event("melee_do_damage", "#*#You #1# #2# for #3# points of damage#*#", meleeCallBack)
-    mq.event("melee_miss", "#*#You try to #1# #2#, but miss#*#", function() end)
-    mq.event("melee_non_melee", string.format("#*#%s hit #1# for #2# points of non-melee damage#*#", MyName), nonMeleeCallBack)
-    mq.event("melee_damage_shield", "#*#was hit by non-melee for #2# points of damage#*#", nonMeleeCallBack)
-    mq.event("melee_you_hit_non-melee", "#*#You were hit by non-melee for #2# damage#*#", nonMeleeCallBack)
-    mq.event("melee_crit_heal", "#*#You perform an exceptional heal!#*#(#1#)#*#", critHealCallBack)
-
-    -- Only register AA events for EZ Linux server (NEW)
-    if isEZLinuxServer() then
-        mq.event("aa_display_capture", "Unspent AA: #1#", aaDisplayCallback)
-        mq.event("aa_gain_capture", "#*#You now have #1# ability point(s)#*#", aaGainCallback)
-        print("[Peers] DPS and AA events registered for EZ Linux server.")
-
-        -- Request initial AA update
-        if not aa_said then
-            mq.cmd('/say AA')
-            aa_said = true
-        end
-    else
-        print("[Peers] DPS events registered. Using TLO for AA points on this server.")
-    end
 
     lastAACheckTime = os.time()
     refreshPeers()
