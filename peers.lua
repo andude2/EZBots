@@ -178,14 +178,14 @@ local function get_groupstatus_text(peerName)
     if mq.TLO.Group.Members() > 0 then
         local groupMember = mq.TLO.Group.Member(peerName)
         if groupMember() then
-            return "F" .. (groupMember.Index() + 1)
+            return "F" .. ((groupMember.Index() or 0) + 1)
         end
     end
 
     if mq.TLO.Raid.Members() > 0 then
         local raidMember = mq.TLO.Raid.Member(peerName)
         if raidMember() then
-            return "G" .. raidMember.Group()
+            return "G" .. (raidMember.Group() or 0)
         end
     end
 
