@@ -2,8 +2,6 @@ A lightweight resource to help monitor all your connected bots.  Script must run
 
 ![Screenshot 2025-05-20 203952](https://github.com/user-attachments/assets/ce1a5645-417b-4aca-95fc-4772dfffa8ee)
 
-DPS Column credit goes to Grimmier378 @ https://github.com/grimmier378/MyDPS - borrowed his logic and much of his event capture for the DPS.
-
 Left click a Character to switch to their screen.  Right click to target that character.
 
 Characters in the same zone appear in green - out of zone appear in red.  Toggle between Character names or Character Class.  
