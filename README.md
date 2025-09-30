@@ -1,5 +1,7 @@
 A lightweight resource to help monitor all your connected bots.  Script must run on all characters, giving you a Heads Up on who's where, what, when and how.
 
+***DPS Functions have been removed*** The Screenshots below will be updated as time permits.  09/29/2025
+
 ![Screenshot 2025-05-20 203952](https://github.com/user-attachments/assets/ce1a5645-417b-4aca-95fc-4772dfffa8ee)
 
 Left click a Character to switch to their screen.  Right click to target that character.
