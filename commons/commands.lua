@@ -111,7 +111,7 @@ local function write_default_alias_file()
     file:write("[aliases]\n")
     file:write("healers = ClericOne, ClericTwo\n")
     file:write("tanks = WarriorMain, PaladinAlt\n")
-    file:write("casters = Estos, Kelythar, Lerdari\n")
+    file:write("casters = \n")
     file:write("; Add more alias groups as needed\n")
     file:close()
 

@@ -35,6 +35,17 @@ local combinedUIOpen        = { value = true, }    -- Use a table for mutable bo
 local combinedUIInitialized = false
 local showPeerAAWindow      = peers.show_aa_window -- Link directly to the peers module's flag
 local showSortWindow        = peers.show_sort_editor
+local MIN_FONT_SCALE        = 0.5
+local MAX_FONT_SCALE        = 2.0
+local FONT_SCALE_STEP       = 0.1
+
+local function get_peer_font_scale()
+    return math.min(MAX_FONT_SCALE, math.max(MIN_FONT_SCALE, tonumber(peers.options.font_scale) or 1.0))
+end
+
+local function get_peer_font_size()
+    return imgui.GetStyle().FontSizeBase * get_peer_font_scale()
+end
 
 
 ------------------------------------------------------
@@ -64,11 +75,11 @@ local function DrawPlayerStats()
 
     imgui.SameLine(windowWidth - (buttonSize * 2 + spacing * 2))
     if imgui.SmallButton("-##fontScaleDown") then
-        peers.options.font_scale = math.max(0.5, peers.options.font_scale - 0.1)
+        peers.options.font_scale = math.max(MIN_FONT_SCALE, get_peer_font_scale() - FONT_SCALE_STEP)
     end
     imgui.SameLine()
     if imgui.SmallButton("+##fontScaleUp") then
-        peers.options.font_scale = math.min(2.0, peers.options.font_scale + 0.1)
+        peers.options.font_scale = math.min(MAX_FONT_SCALE, get_peer_font_scale() + FONT_SCALE_STEP)
     end
     if imgui.IsItemHovered() then
         imgui.SetTooltip("Adjust Font Scale")
@@ -113,6 +124,7 @@ local function CombinedUI()
             peers.options.show_endurance    = imgui.Checkbox("Show End (%)", peers.options.show_endurance)
             peers.options.show_mana         = imgui.Checkbox("Show Mana (%)", peers.options.show_mana)
             peers.options.show_pethp        = imgui.Checkbox("Show PetHP (%)", peers.options.show_pethp)
+            peers.options.show_aa           = imgui.Checkbox("Show AA", peers.options.show_aa)
             peers.options.show_tribute      = imgui.Checkbox("Show Tribute", peers.options.show_tribute)
             peers.options.show_tribute_value= imgui.Checkbox("Show Tribute Value", peers.options.show_tribute_value)
             peers.options.show_distance     = imgui.Checkbox("Show Distance", peers.options.show_distance)
@@ -186,8 +198,9 @@ local function CombinedUI()
         -- Child window for peer list with calculated height
         local opened = imgui.BeginChild("PeerListChild", ImVec2(0, peerData.cached_height), false, ImGuiWindowFlags.None)
         if opened then
-            ImGui.SetWindowFontScale(peers.options.font_scale)
+            imgui.PushFont(nil, get_peer_font_size())
             peers.draw_peer_list()
+            imgui.PopFont()
         end
         imgui.EndChild()
     end
@@ -224,12 +237,10 @@ mq.imgui.init('CombinedUI', CombinedUI) -- Use a unique name
 -- MAIN EVENT LOOP
 ------------------------------------------------------
 print("[Main] Starting Event Loop...")
-local refreshInterval = peers.get_refresh_interval() -- Get interval from peers module
-
 while mq.TLO.MacroQuest.GameState() == "INGAME" do
     peers.update()
     mq.doevents()
-    mq.delay(refreshInterval) -- Use the interval defined in peers module
+    mq.delay(peers.get_refresh_interval())
 end
 
 print("[Main] Event Loop Ended.")
