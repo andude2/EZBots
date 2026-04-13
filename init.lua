@@ -165,6 +165,20 @@ local function CombinedUI()
                 showSortWindow.value = not showSortWindow.value
             end
 
+            if imgui.BeginMenu("Import Saved Peer UI") then
+                local savedCharacters = peers.get_saved_character_names and peers.get_saved_character_names() or {}
+                if #savedCharacters == 0 then
+                    imgui.TextDisabled("No saved characters found")
+                else
+                    for _, charName in ipairs(savedCharacters) do
+                        if imgui.MenuItem(charName) then
+                            peers.import_profile_from_character(charName)
+                        end
+                    end
+                end
+                imgui.EndMenu()
+            end
+
             imgui.Separator()
             if imgui.MenuItem("Show AA Window", nil, showPeerAAWindow.value) then
                 showPeerAAWindow.value = not showPeerAAWindow.value

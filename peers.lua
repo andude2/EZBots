@@ -54,6 +54,7 @@ M.options                  = {          -- Options controlled by the main UI men
 }
 M.show_aa_window           = { value = false, } -- Control the visibility of the AA window
 M.show_sort_editor         = { value = false, }
+M.sort_import_status       = nil
 
 local lastPeerCount        = 0
 local cachedPeerHeight     = 300 -- Default height
@@ -153,8 +154,121 @@ local function formatNumberWithCommas(num)
     return formatted
 end
 
-local function get_target_refresh_interval()
-    return mq.TLO.EverQuest.Foreground() == true and FG_REFRESH_MS or BG_REFRESH_MS
+local function read_all_config()
+    local file = io.open(config_path, "r")
+    if not file then
+        return {}
+    end
+
+    local content = file:read("*a")
+    file:close()
+
+    local parsed = json.decode(content)
+    if type(parsed) ~= "table" then
+        return {}
+    end
+
+    return parsed
+end
+
+local function get_saved_character_names()
+    local all_config = read_all_config()
+    local names = {}
+
+    for charName, options in pairs(all_config) do
+        if type(charName) == "string" and type(options) == "table" and charName ~= myName then
+            table.insert(names, charName)
+        end
+    end
+
+    table.sort(names, function(a, b)
+        return a:lower() < b:lower()
+    end)
+
+    return names
+end
+
+local function clone_custom_order(custom_order)
+    local copied = {}
+    if type(custom_order) ~= "table" then
+        return copied
+    end
+
+    for _, entry in ipairs(custom_order) do
+        if type(entry) == "table" then
+            local copied_entry = {}
+            for key, value in pairs(entry) do
+                copied_entry[key] = value
+            end
+            table.insert(copied, copied_entry)
+        end
+    end
+
+    return copied
+end
+
+local function clone_options_table(source)
+    local copied = {}
+    if type(source) ~= "table" then
+        return copied
+    end
+
+    for key, value in pairs(source) do
+        if type(value) == "table" then
+            if key == "custom_order" then
+                copied[key] = clone_custom_order(value)
+            else
+                local nested = {}
+                for nested_key, nested_value in pairs(value) do
+                    nested[nested_key] = nested_value
+                end
+                copied[key] = nested
+            end
+        else
+            copied[key] = value
+        end
+    end
+
+    return copied
+end
+
+local function import_profile_from_character(source_name)
+    source_name = type(source_name) == "string" and source_name:match("^%s*(.-)%s*$") or nil
+    if not source_name or source_name == "" then
+        return false, "Usage: /peerui importprofile <character>"
+    end
+
+    if source_name == myName then
+        return false, "Source character must be different from the current character."
+    end
+
+    local all_config = read_all_config()
+    local source_options = all_config[source_name]
+    if type(source_options) ~= "table" then
+        return false, string.format("No saved peer UI config found for '%s'.", source_name)
+    end
+
+    local merged_options = clone_options_table(M.options)
+    local imported_options = clone_options_table(source_options)
+    for key, value in pairs(imported_options) do
+        merged_options[key] = value
+    end
+
+    M.options = merged_options
+
+    M.save_config()
+
+    local imported_entries = #(M.options.custom_order or {})
+    return true, string.format("Imported full peer UI from %s (%d custom entries, mode: %s).",
+        source_name, imported_entries, M.options.sort_mode or "Alphabetical")
+end
+
+local function set_sort_import_status(message, is_error)
+    M.sort_import_status = {
+        text = message,
+        is_error = is_error == true,
+        timestamp = os.time(),
+    }
 end
 
 -- Helper: Get health bar color
@@ -947,6 +1061,30 @@ function M.draw_sort_editor()
         imgui.Text("Custom Sort Order:")
         imgui.Separator()
 
+        local saved_characters = get_saved_character_names()
+        if #saved_characters > 0 then
+            imgui.Text("Import Saved Peer UI:")
+            for _, charName in ipairs(saved_characters) do
+                imgui.PushID("import_sort_" .. charName)
+                if imgui.SmallButton(charName) then
+                    local ok, message = import_profile_from_character(charName)
+                    set_sort_import_status(message, not ok)
+                end
+                imgui.PopID()
+                imgui.SameLine()
+            end
+            imgui.NewLine()
+            imgui.Separator()
+        end
+
+        if M.sort_import_status and M.sort_import_status.text then
+            local statusColor = M.sort_import_status.is_error and ImVec4(1.0, 0.4, 0.4, 1.0) or ImVec4(0.4, 1.0, 0.4, 1.0)
+            imgui.PushStyleColor(ImGuiCol.Text, statusColor)
+            imgui.TextWrapped(M.sort_import_status.text)
+            imgui.PopStyleColor()
+            imgui.Separator()
+        end
+
         imgui.Columns(2, nil, false) -- 2 columns: Label + Buttons
         imgui.SetColumnWidth(0, 180)
 
@@ -1044,31 +1182,19 @@ local function get_target_refresh_interval()
 end
 
 function M.load_config()
-    local file = io.open(config_path, "r")
-    if file then
-        local content = file:read("*a")
-        file:close()
-        local parsed = json.decode(content)
-        if parsed and parsed[myName] then
-            for k, v in pairs(parsed[myName]) do
-                M.options[k] = v
-            end
+    local parsed = read_all_config()
+    if parsed and parsed[myName] then
+        for k, v in pairs(parsed[myName]) do
+            M.options[k] = v
         end
     end
 end
 
 function M.save_config()
-    local all_config = {}
-    local file = io.open(config_path, "r")
-    if file then
-        local content = file:read("*a")
-        file:close()
-        all_config = json.decode(content) or {}
-    end
-
+    local all_config = read_all_config()
     all_config[myName] = M.options
 
-    file = io.open(config_path, "w")
+    local file = io.open(config_path, "w")
     if file then
         file:write(json.encode(all_config, { indent = true, }))
         file:close()
@@ -1092,6 +1218,30 @@ end
 
 mq.bind("/savepeerui", function()
     M.save_config()
+end)
+
+mq.bind("/peerui", function(line)
+    local args = type(line) == "string" and line:match("^%s*(.-)%s*$") or ""
+    local command, rest = args:match("^(%S+)%s*(.-)$")
+    command = command and command:lower() or ""
+
+    if command == "importprofile" or command == "importsort" then
+        local ok, message = import_profile_from_character(rest)
+        set_sort_import_status(message, not ok)
+        print(string.format("%s[Peers] %s\ax", ok and "\ag" or "\ar", message))
+        return
+    end
+
+    if command == "help" or command == "" then
+        print("\ay[Peers] Commands:\ax")
+        print("  /peerui importprofile <character>")
+        print("  /peerui importsort <character>  (alias)")
+        print("  /peerui help")
+        return
+    end
+
+    print(string.format("\ar[Peers] Unknown /peerui command: %s\ax", command))
+    print("  /peerui importprofile <character>")
 end)
 
 -- Initialization function
@@ -1137,6 +1287,21 @@ end
 
 function M.get_refresh_interval()
     return get_target_refresh_interval() or REFRESH_INTERVAL_MS
+end
+
+function M.get_saved_character_names()
+    return get_saved_character_names()
+end
+
+function M.import_profile_from_character(source_name)
+    local ok, message = import_profile_from_character(source_name)
+    set_sort_import_status(message, not ok)
+    print(string.format("%s[Peers] %s\ax", ok and "\ag" or "\ar", message))
+    return ok, message
+end
+
+function M.import_sort_from_character(source_name)
+    return M.import_profile_from_character(source_name)
 end
 
 -- Make formatNumberWithCommas available for external use (NEW)
